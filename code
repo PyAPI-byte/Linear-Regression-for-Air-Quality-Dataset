@@ -1,0 +1,157 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from pandas.plotting import scatter_matrix
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import root_mean_squared_error
+
+# ==========================================
+# FASE 1: EXPLORATORY DATA ANALYSIS (EDA)
+# ==========================================
+
+# 1. Caricamento del Dataset
+df = pd.read_csv("air_quality_dataset.csv")
+
+# (Opzionale) Controlli preliminari sullo stato del dataset
+print("Prime 5 righe del dataset:")
+print(df.head())
+print("Nomi delle colonne, Non-Null Count, Dtype:")
+print(df.info())
+print("-" * 40)
+# (Opzionale) print(df["CO2"].value_counts()) per capire quanti valori appartengono ad ogni categoria
+
+# (Plottare tutti gli istogrammi di ogni attributo numerico)
+#plt.rc('font', size=14) #Imposta la dimensione del font di base a 14 pt.
+#plt.rc('axes', labelsize=14, titlesize=14) #Configura i parametri del gruppo axes (gli assi cartesiani del grafico)
+#plt.rc('legend', fontsize=14) #Imposta la dimensione del testo all'interno della legenda a 14 pt (utile se sono presenti più serie di dati nello stesso riquadro)
+#plt.rc('xtick', labelsize=10) #Imposta a 10 pt la dimensione del testo per i valori numerici o le etichette delle tacche (ticks) lungo l'asse orizzontale $X$. Una dimensione leggermente inferiore rispetto al titolo evita che i numeri si sovrappongano tra loro.
+#plt.rc('ytick', labelsize=10) #Imposta a 10 pt la dimensione del testo per i valori numerici delle tacche lungo l'asse verticale $Y$.
+
+#df.hist(bins=50, figsize=(12, 8)) #dati suddivisi in 50 intervalli, dimesnioni del grafico finale
+#plt.show()
+
+# Calcolo della matrice di correlazione
+corr_matrix = df.corr(numeric_only=True)
+print(corr_matrix["PM2.5"].sort_values(ascending=False))
+
+# Visualizzazione della scatter matrix per gli attributi selezionati
+attributes = ["PM2.5","SO2","CO2","PM10","CH4"]
+scatter_matrix(df[attributes], figsize=(12,8))
+
+# Scatter plot esplorativo iniziale tra CH4 e PM10
+df.plot(kind="scatter", x="CH4", y="PM10", alpha=0.5, grid=True)
+plt.show()
+
+
+# ==========================================
+# FASE 2: MACHINE LEARNING MODELING CON GRIDSEARCHCV
+# ==========================================
+
+# 2. Divisione in Train set e Test set (80% training, 20% test)
+train_set, test_set = train_test_split(df, test_size=0.2, random_state=42)
+
+# train_test_split mescola le righe del dataset in modo casuale prima di dividerlo 
+# (il che è un bene, per evitare che le prime righe siano tutte di una certa stagione o condizione).
+# test size divide train set 80% e test set 20%
+# random_state=42 è una tradizione nerd per impostare il seed, così ogni volta che
+# eseguirai il codice, le divisioni saranno sempre identiche, garantendo la ripetibilità.
+  
+# 3. Separazione tra Feature (input: CH4) e Target (output da prevedere: PM10)
+# Usiamo le doppie parentesi quadre per X in modo da mantenerla come DataFrame (richiesto da Scikit-Learn)
+X_train = train_set[["CH4"]]
+y_train = train_set["PM10"]
+
+X_test = test_set[["CH4"]]
+y_test = test_set["PM10"]
+
+# 4. Creazione della Pipeline di base (Pulizia dati + Modello di Regressione Lineare)
+air_pipeline = make_pipeline(
+    SimpleImputer(strategy="median"),
+    LinearRegression()
+)
+
+# Definizione della griglia di iperparametri da testare con la cross-validation
+param_grid = {
+    'simpleimputer__strategy': ['median', 'mean'],
+    'linearregression__fit_intercept': [True, False]
+}
+
+#Testerà Analizziamo nel dettaglio cosa sta succedendo sotto il cofano. Questo dizionario definisce una griglia di combinazioni (prodotto cartesiano):
+#Strategia 1: Imputer con la mediana + Regressione Lineare con intercetta (fit_intercept=True).
+#Strategia 2: Imputer con la mediana + Regressione Lineare senza intercetta (fit_intercept=False).
+#Strategia 3: Imputer con la media + Regressione Lineare con intercetta (fit_intercept=True).
+#Strategia 4: Imputer con la media + Regressione Lineare senza intercetta (fit_intercept=False).
+#Il GridSearchCV prenderà il dataset, replicherà l'addestramento e la validazione incrociata (cross-validation) per tutte e 4 queste combinazioni, misurando l'errore per ciascuna di esse, e alla fine sceglierà la vincitrice assoluta da salvare nel tuo best_model.
+
+# Configurazione di GridSearchCV: 
+# - Utilizza la validazione incrociata (cv=5) per trovare la combinazione migliore.
+# - Grazie a refit=True (di default), una volta trovato il modello ideale, lo ri-addestra 
+#   automaticamente sull'intero set di addestramento (X_train, y_train) per massimizzarne le prestazioni.
+grid_search = GridSearchCV(
+    estimator=air_pipeline,
+    param_grid=param_grid,
+    cv=5,
+    scoring='neg_root_mean_squared_error',
+    refit=True
+)
+
+# 5. Addestramento e ricerca automatica sul Train set (fit)
+grid_search.fit(X_train, y_train)
+
+# Estrazione della pipeline vincente completa tramite la proprietà .best_estimator_
+best_model = grid_search.best_estimator_
+
+# Stampiamo i migliori parametri trovati dalla ricerca
+print("\nMigliori parametri trovati da GridSearchCV:")
+print(grid_search.best_params_)
+
+# 6. Predizione sul Test set (predict)
+# Eseguendo best_model.predict(X_test), i dati mai visti vengono trasformati ed esaminati 
+# in un unico passaggio sicuro, prevenendo qualsiasi rischio di Data Leakage.
+predictions = best_model.predict(X_test)
+
+# 7. Valutazione del modello (calcolo dell'errore RMSE)
+rmse = root_mean_squared_error(y_test, predictions)
+
+# Stampiamo i risultati finali per il confronto
+print("\nRisultati della Regressione Lineare Ottimizzata (CH4 -> PM10):")
+print(f"Prime 5 previsioni di PM10 : {predictions[:5].round(2)}")
+print(f"Primi 5 valori reali di PM10 : {y_test.values[:5]}")
+print(f"Errore medio (RMSE) sul Test: {rmse:.2f}")
+
+
+# ==========================================
+# FASE 3: PLOT DELLA RETTA DI REGRESSIONE
+# ==========================================
+
+# 1. Creiamo la figura del grafico
+plt.figure(figsize=(10, 6))
+
+# 2. Plottiamo i punti di Training (in blu) e di Test (in arancione)
+plt.scatter(X_train, y_train, color='blue', alpha=0.4, label='Dati di Training')
+plt.scatter(X_test, y_test, color='orange', alpha=0.6, label='Dati di Test (Reali)')
+
+# 3. CREIAMO E PLOTTIAMO LA RETTA DI REGRESSIONE
+# Per garantire che la retta copra l'intero intervallo dei dati a disposizione, 
+# prendiamo il min e il max estrapolandoli dall'intero dataset anziché solo dal test set
+x_line = np.linspace(df["CH4"].min(), df["CH4"].max(), 100).reshape(-1, 1)
+
+# Chiediamo al best_model (la pipeline completa e ottimizzata) di calcolare la y corrispondente
+y_line = best_model.predict(x_line)
+
+# Disegniamo la linea rossa sopra il grafico
+plt.plot(x_line, y_line, color='red', linewidth=3, label='Retta di Regressione (GridSearch)')
+
+# 4. Personalizzazione estetica del grafico
+plt.title('Regressione Lineare Ottimizzata: CH4 vs PM10', fontsize=14)
+plt.xlabel('CH4 (Metano - Input X)', fontsize=12)
+plt.ylabel('PM10 (Target Y)', fontsize=12)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+
+# 5. Mostriamo a schermo il grafico finale
+plt.show()
